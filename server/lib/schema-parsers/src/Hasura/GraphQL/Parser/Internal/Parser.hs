@@ -24,6 +24,7 @@ import Data.Function ((&))
 import Data.Functor ((<&>))
 import Data.HashMap.Strict (HashMap)
 import Data.HashMap.Strict qualified as HashMap
+import Data.HashMap.Strict.InsOrd (InsOrdHashMap)
 import Data.HashMap.Strict.InsOrd qualified as InsOrdHashMap
 import Data.HashSet qualified as S
 import Data.Hashable (Hashable)
@@ -120,12 +121,22 @@ wrapFieldParser = \case
   G.TypeList (G.Nullability True) t -> nullableField . multipleField . wrapFieldParser t
   G.TypeList (G.Nullability False) t -> nonNullableField . multipleField . wrapFieldParser t
 
--- | Decorate a schema output type as NON_NULL
-nonNullableParser :: forall m origin a. Parser origin 'Output m a -> Parser origin 'Output m a
+-- | Decorate a schema type as NON_NULL.  Note that this is unsafe for
+-- 'Output parsers, in the sense that 'nonNullableParser' doesn't (and due to
+-- the polymorphic nature of the 'a' type parameter, can't) ensure that the
+-- provided parser provides a semantically non-null value.
+nonNullableParser :: forall m origin k a. Parser origin k m a -> Parser origin k m a
 nonNullableParser parser = parser {pType = nonNullableType (pType parser)}
 
--- | Make a schema output as nullable
-nullableParser :: forall m origin a. Parser origin 'Output m a -> Parser origin 'Output m a
+-- | Mark a schema type as nullable.  Syntactically speaking, this is the
+-- default, because the GraphQL spec explicitly requires use of ! to mark types
+-- as non-nullable.  But many constructions in our codebase are non-nullable by
+-- default, since this matches the Haskell type system better.
+--
+-- Note that this is unsafe for 'Input parsers, in the sense that
+-- 'nullableParser' doesn't ensure that the provided parser actually deals with
+-- 'null' input values.
+nullableParser :: forall m origin k a. Parser origin k m a -> Parser origin k m a
 nullableParser parser = parser {pType = nullableType (pType parser)}
 
 multiple :: forall m origin a. Parser origin 'Output m a -> Parser origin 'Output m a
@@ -175,7 +186,7 @@ selectionSet ::
   Name ->
   Maybe Description ->
   [FieldParser origin m a] ->
-  Parser origin 'Output m (InsOrdHashMap.InsOrdHashMap Name (ParsedSelection a))
+  Parser origin 'Output m (InsOrdHashMap Name (ParsedSelection a))
 selectionSet name desc fields = selectionSetObject name desc fields []
 
 safeSelectionSet ::
@@ -184,7 +195,7 @@ safeSelectionSet ::
   Name ->
   Maybe Description ->
   [FieldParser origin m a] ->
-  n (Parser origin 'Output m (InsOrdHashMap.InsOrdHashMap Name (ParsedSelection a)))
+  n (Parser origin 'Output m (InsOrdHashMap Name (ParsedSelection a)))
 {-# INLINE safeSelectionSet #-}
 safeSelectionSet name description fields =
   case duplicatesList of
@@ -194,10 +205,14 @@ safeSelectionSet name description fields =
     -- plural
     printedDuplicates -> throwError $ "Encountered conflicting definitions in the selection set for " <> toErrorValue name <> " for fields: " <> toErrorValue printedDuplicates <> ". Fields must not be defined more than once across all sources."
   where
-    namesOrigins :: HashMap Name [Maybe origin]
-    namesOrigins = HashMap.fromListWith (<>) $ (dName &&& (pure . dOrigin)) . fDefinition <$> fields
-    duplicates :: HashMap Name [Maybe origin]
-    duplicates = HashMap.filter ((> 1) . length) namesOrigins
+    namesOrigins :: InsOrdHashMap Name [Maybe origin]
+    namesOrigins =
+      foldr
+        (uncurry (InsOrdHashMap.insertWith (<>)))
+        InsOrdHashMap.empty
+        ((dName &&& (pure . dOrigin)) . fDefinition <$> fields)
+    duplicates :: InsOrdHashMap Name [Maybe origin]
+    duplicates = InsOrdHashMap.filter ((> 1) . length) namesOrigins
     uniques = S.toList . S.fromList
     printEntry (fieldName, originsM) =
       let origins = uniques $ catMaybes originsM
@@ -207,7 +222,7 @@ safeSelectionSet name description fields =
                 toErrorValue fieldName <> " defined in " <> toErrorValue origins <> " and of unknown origin"
             | otherwise ->
                 toErrorValue fieldName <> " defined in " <> toErrorValue origins
-    duplicatesList = printEntry <$> HashMap.toList duplicates
+    duplicatesList = printEntry <$> InsOrdHashMap.toList duplicates
 
 -- Should this rather take a non-empty `FieldParser` list?
 -- See also Note [Selectability of tables].

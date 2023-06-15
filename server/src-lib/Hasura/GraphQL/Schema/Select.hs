@@ -29,8 +29,8 @@ where
 
 import Control.Lens hiding (index)
 import Data.Aeson qualified as J
-import Data.Aeson.Internal qualified as J
 import Data.Aeson.Key qualified as K
+import Data.Aeson.Types qualified as J
 import Data.ByteString.Lazy qualified as BL
 import Data.Has
 import Data.HashMap.Strict.Extended qualified as HashMap
@@ -800,7 +800,7 @@ tableConnectionArgs pkeyColumns tableInfo = do
               iResultToMaybe (executeJSONPath columnJsonPath cursorValue)
                 `onNothing` throwInvalidCursor
             pgValue <- liftQErr $ parseScalarValueColumnType columnType columnValue
-            let unresolvedValue = IR.UVParameter IR.Unknown $ ColumnValue columnType pgValue
+            let unresolvedValue = IR.UVParameter IR.FreshVar $ ColumnValue columnType pgValue
             pure
               $ IR.ConnectionSplit splitKind unresolvedValue
               $ IR.OrderByItemG Nothing (IR.AOCColumn columnInfo) Nothing
@@ -812,7 +812,7 @@ tableConnectionArgs pkeyColumns tableInfo = do
               iResultToMaybe (executeJSONPath (map (J.Key . K.fromText) (getPathFromOrderBy annObCol)) cursorValue)
                 `onNothing` throwInvalidCursor
             pgValue <- liftQErr $ parseScalarValueColumnType columnType orderByItemValue
-            let unresolvedValue = IR.UVParameter IR.Unknown $ ColumnValue columnType pgValue
+            let unresolvedValue = IR.UVParameter IR.FreshVar $ ColumnValue columnType pgValue
             pure
               $ IR.ConnectionSplit splitKind unresolvedValue
               $ IR.OrderByItemG orderType annObCol nullsOrder
@@ -1448,7 +1448,7 @@ relationshipField table ri = runMaybeT do
         $ P.subselection_ relFieldName desc selectionSetParser
         <&> \fields ->
           IR.AFObjectRelation
-            $ IR.AnnRelationSelectG (riName ri) (riMapping ri)
+            $ IR.AnnRelationSelectG (riName ri) (riMapping ri) Nullable
             $ IR.AnnObjectSelectG fields (IR.FromTable otherTableName)
             $ deduplicatePermissions
             $ IR._tpFilter
@@ -1460,7 +1460,7 @@ relationshipField table ri = runMaybeT do
             otherTableParser <&> \selectExp ->
               IR.AFArrayRelation
                 $ IR.ASSimple
-                $ IR.AnnRelationSelectG (riName ri) (riMapping ri)
+                $ IR.AnnRelationSelectG (riName ri) (riMapping ri) Nullable
                 $ deduplicatePermissions' selectExp
           relAggFieldName = applyFieldNameCaseCust tCase $ relFieldName <> Name.__aggregate
           relAggDesc = Just $ G.Description "An aggregate relationship"
@@ -1479,8 +1479,8 @@ relationshipField table ri = runMaybeT do
       pure
         $ catMaybes
           [ Just arrayRelField,
-            fmap (IR.AFArrayRelation . IR.ASAggregate . IR.AnnRelationSelectG (riName ri) (riMapping ri)) <$> remoteAggField,
-            fmap (IR.AFArrayRelation . IR.ASConnection . IR.AnnRelationSelectG (riName ri) (riMapping ri)) <$> remoteConnectionField
+            fmap (IR.AFArrayRelation . IR.ASAggregate . IR.AnnRelationSelectG (riName ri) (riMapping ri) Nullable) <$> remoteAggField,
+            fmap (IR.AFArrayRelation . IR.ASConnection . IR.AnnRelationSelectG (riName ri) (riMapping ri) Nullable) <$> remoteConnectionField
           ]
 
 tablePermissionsInfo :: (Backend b) => SelPermInfo b -> TablePerms b

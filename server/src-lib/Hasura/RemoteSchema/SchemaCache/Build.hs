@@ -16,8 +16,10 @@ import Data.HashMap.Strict.Extended qualified as HashMap
 import Data.Text qualified as T
 import Data.Text.Extended
 import Hasura.Base.Error
+import Hasura.EncJSON (encJFromLBS)
 import Hasura.GraphQL.RemoteServer
 import Hasura.Incremental qualified as Inc
+import Hasura.Logging
 import Hasura.Prelude
 import Hasura.RQL.DDL.Schema.Cache.Common
 import Hasura.RQL.DDL.Schema.Cache.Permission
@@ -38,7 +40,7 @@ import Hasura.Tracing qualified as Tracing
 buildRemoteSchemas ::
   ( ArrowChoice arr,
     Inc.ArrowDistribute arr,
-    ArrowWriter (Seq (Either InconsistentMetadata MetadataDependency)) arr,
+    ArrowWriter (Seq CollectItem) arr,
     Inc.ArrowCache m arr,
     MonadIO m,
     MonadBaseControl IO m,
@@ -47,12 +49,13 @@ buildRemoteSchemas ::
     MonadError QErr m,
     ProvidesNetwork m
   ) =>
+  Logger Hasura ->
   Env.Environment ->
   ( (Inc.Dependency (HashMap RemoteSchemaName Inc.InvalidationKey), OrderedRoles, Maybe (HashMap RemoteSchemaName BL.ByteString)),
     [RemoteSchemaMetadataG remoteRelationshipDefinition]
   )
     `arr` HashMap RemoteSchemaName (PartiallyResolvedRemoteSchemaCtxG remoteRelationshipDefinition, MetadataObject)
-buildRemoteSchemas env =
+buildRemoteSchemas logger env =
   buildInfoMapPreservingMetadata _rsmName mkRemoteSchemaMetadataObject buildRemoteSchema
   where
     -- We want to cache this call because it fetches the remote schema over
@@ -64,7 +67,10 @@ buildRemoteSchemas env =
       upstreamResponse <- bindA -< runExceptT (noopTrace $ addRemoteSchemaP2Setup env defn)
       remoteSchemaContextParts <-
         case upstreamResponse of
-          Right upstream -> returnA -< Just upstream
+          Right upstream@(_, byteString, _) -> do
+            -- Collect upstream introspection response to persist in the storage
+            tellA -< pure (CollectStoredIntrospection $ RemoteSchemaIntrospectionItem name $ encJFromLBS byteString)
+            returnA -< Just upstream
           Left upstreamError -> do
             -- If upstream is not available, try to lookup from stored introspection
             case (HashMap.lookup name =<< storedIntrospection) of
@@ -89,6 +95,7 @@ buildRemoteSchemas env =
                             ]
                     -- Still record inconsistency to notify the user obout the usage of stored stale data
                     recordInconsistencies -< ((Just $ toJSON (qeInternal upstreamError), [metadataObj]), inconsistencyMessage)
+                    bindA -< unLogger logger $ StoredIntrospectionLog ("Using stored introspection for remote schema " <>> name) upstreamError
                     returnA -< Just processed
                   Left _processError ->
                     -- Unable to process stored introspection, give up and re-throw upstream exception
@@ -123,7 +130,7 @@ buildRemoteSchemas env =
 buildRemoteSchemaPermissions ::
   ( ArrowChoice arr,
     Inc.ArrowDistribute arr,
-    ArrowWriter (Seq (Either InconsistentMetadata MetadataDependency)) arr,
+    ArrowWriter (Seq CollectItem) arr,
     ArrowKleisli m arr,
     MonadError QErr m
   ) =>

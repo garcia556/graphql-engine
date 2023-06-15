@@ -248,3 +248,32 @@ mutation addSurveyAnswerV2 ($responses: [SurveyResponseV2]!, $surveyName: String
    }
  }
  `);
+
+/**
+ * GraphQL mutation to accept schema registry feature requests
+ * */
+
+export const ADD_SCHEMA_REGISTRY_FEATURE_REQUEST = gql(`
+  mutation addSchemaRegistryFeatureRequest ($details:jsonb!) {
+    addFeatureRequest (payload: {
+      type: "schema-registry-feature-request"
+      details: $details
+    }) {
+      status
+    }
+  }
+`);
+
+export const FETCH_CONFIG_STATUS = gql(`
+  subscription FetchConfigStatus($tenantId: uuid!) {
+    config_status(
+      where: {
+        tenant_id: { _eq: $tenantId }
+        is_active: { _eq: true }
+      }
+    ) {
+      hash
+      message
+    }
+  }
+`);

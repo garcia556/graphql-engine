@@ -39,6 +39,10 @@ module Hasura.Logging
     createStatsLogger,
     closeStatsLogger,
     logStats,
+
+    -- * Other internal logs
+    StoredIntrospectionLog (..),
+    StoredIntrospectionStorageLog (..),
   )
 where
 
@@ -62,6 +66,7 @@ import Data.Text qualified as T
 import Data.Time.Clock qualified as Time
 import Data.Time.Format qualified as Format
 import Data.Time.LocalTime qualified as Time
+import Hasura.Base.Error (QErr)
 import Hasura.Prelude
 import System.Log.FastLogger qualified as FL
 import Witch qualified
@@ -146,6 +151,8 @@ data InternalLogTypes
   | ILTTelemetry
   | ILTSchemaSync
   | ILTSourceCatalogMigration
+  | ILTStoredIntrospection
+  | ILTStoredIntrospectionStorage
   deriving (Show, Eq, Generic)
 
 instance Hashable InternalLogTypes
@@ -165,6 +172,8 @@ instance Witch.From InternalLogTypes Text where
     ILTTelemetry -> "telemetry-log"
     ILTSchemaSync -> "schema-sync"
     ILTSourceCatalogMigration -> "source-catalog-migration"
+    ILTStoredIntrospection -> "stored-introspection"
+    ILTStoredIntrospectionStorage -> "stored-introspection-storage"
 
 instance J.ToJSON InternalLogTypes where
   toJSON = J.String . Witch.into @Text
@@ -372,6 +381,36 @@ cronEventGeneratorProcessType = ELTInternal ILTCronEventGeneratorProcess
 
 sourceCatalogMigrationLogType :: EngineLogType Hasura
 sourceCatalogMigrationLogType = ELTInternal ILTSourceCatalogMigration
+
+-- | Emit when stored introspection is used
+data StoredIntrospectionLog = StoredIntrospectionLog
+  { silMessage :: Text,
+    -- | upstream data source errors
+    silSourceError :: QErr
+  }
+  deriving stock (Generic)
+
+instance J.ToJSON StoredIntrospectionLog where
+  toJSON = J.genericToJSON hasuraJSON
+
+instance ToEngineLog StoredIntrospectionLog Hasura where
+  toEngineLog siLog =
+    (LevelInfo, ELTInternal ILTStoredIntrospection, J.toJSON siLog)
+
+-- | Logs related to errors while interacting with the stored introspection
+-- storage
+data StoredIntrospectionStorageLog = StoredIntrospectionStorageLog
+  { sislMessage :: Text,
+    sislError :: QErr
+  }
+  deriving stock (Generic)
+
+instance J.ToJSON StoredIntrospectionStorageLog where
+  toJSON = J.genericToJSON hasuraJSON
+
+instance ToEngineLog StoredIntrospectionStorageLog Hasura where
+  toEngineLog sisLog =
+    (LevelInfo, ELTInternal ILTStoredIntrospectionStorage, J.toJSON sisLog)
 
 -- | A logger useful for accumulating  and logging stats, in tight polling loops. It also
 -- debounces to not flood with excessive logs. Use @'logStats' to record statistics for logging.

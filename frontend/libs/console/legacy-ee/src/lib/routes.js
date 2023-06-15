@@ -15,6 +15,7 @@ import {
   prefetchEELicenseInfo,
   PageNotFound,
   dataHeaders,
+  loadAdminSecretState,
 } from '@hasura/console-legacy-ce';
 import {
   dataRouterUtils,
@@ -51,6 +52,8 @@ import {
   MultipleAdminSecretsPage,
   MultipleJWTSecretsPage,
   SingleSignOnPage,
+  SchemaRegistryContainer,
+  SchemaDetailsView,
 } from '@hasura/console-legacy-ce';
 
 import AccessDeniedComponent from './components/AccessDenied/AccessDenied';
@@ -63,6 +66,7 @@ import { decodeToken, checkAccess } from './utils/computeAccess';
 import preLoginHook from './utils/preLoginHook';
 import metricsRouter from './components/Services/Metrics/MetricsRouter';
 import { notifyRouteChangeToAppcues } from './utils/appCues';
+import extendedGlobals from './Globals';
 
 const routes = store => {
   // load hasuractl migration status
@@ -287,6 +291,18 @@ const routes = store => {
     // ie. admin privileges are already checked in the login process
     if (globals.consoleType === 'pro-lite') return; // show security tab
 
+    // when consoleType === pro and if admin secret is provided, show security tab
+    if (
+      globals.consoleType === 'pro' &&
+      (extendedGlobals.adminSecret ||
+        loadAdminSecretState() ||
+        globals.adminSecret) &&
+      (extendedGlobals.adminSecret ||
+        loadAdminSecretState() ||
+        globals.adminSecret) !== ''
+    )
+      return;
+
     // cloud cli doesn't have any privileges when `hasura console` command is executed, it will only have previleges when `hasura pro console` is executed.
     // this will make sure that security tab is visible even when the users are running `hasura console` command with valid admin secret
     if (globals.consoleType === 'cloud' && globals.consoleMode === 'cli') {
@@ -369,6 +385,8 @@ const routes = store => {
         >
           <Route path="settings" component={metadataContainer(connect)}>
             <IndexRedirect to="metadata-actions" />
+            <Route path="schema-registry" component={SchemaRegistryContainer} />
+            <Route path="schema-registry/:id" component={SchemaDetailsView} />
             <Route
               path="metadata-actions"
               component={metadataOptionsContainer(connect)}

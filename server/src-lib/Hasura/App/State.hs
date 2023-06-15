@@ -38,6 +38,7 @@ import Hasura.Incremental qualified as Inc
 import Hasura.Logging qualified as L
 import Hasura.Prelude
 import Hasura.RQL.DDL.Schema.Cache.Config
+import Hasura.RQL.Types.BackendType
 import Hasura.RQL.Types.Common
 import Hasura.RQL.Types.Metadata
 import Hasura.RQL.Types.NamingCase
@@ -158,7 +159,8 @@ data AppContext = AppContext
     acEnableTelemetry :: TelemetryStatus,
     acEventEngineCtx :: EventEngineCtx,
     acAsyncActionsFetchInterval :: OptionalInterval,
-    acApolloFederationStatus :: ApolloFederationStatus
+    acApolloFederationStatus :: ApolloFederationStatus,
+    acCloseWebsocketsOnMetadataChangeStatus :: CloseWebsocketsOnMetadataChangeStatus
   }
 
 -- | Collection of the LoggerCtx, the regular Logger and the PGLogger
@@ -268,7 +270,8 @@ buildAppContextRule = proc (ServeOptions {..}, env, _keys) -> do
           acEnableTelemetry = soEnableTelemetry,
           acEventEngineCtx = eventEngineCtx,
           acAsyncActionsFetchInterval = soAsyncActionsFetchInterval,
-          acApolloFederationStatus = soApolloFederationStatus
+          acApolloFederationStatus = soApolloFederationStatus,
+          acCloseWebsocketsOnMetadataChangeStatus = soCloseWebsocketsOnMetadataChangeStatus
         }
   where
     buildSqlGenCtx = Inc.cache proc (experimentalFeatures, stringifyNum, dangerousBooleanCollapse) -> do
@@ -326,7 +329,11 @@ buildCacheStaticConfig AppEnv {..} =
     { _cscMaintenanceMode = appEnvEnableMaintenanceMode,
       _cscEventingMode = appEnvEventingMode,
       _cscReadOnlyMode = appEnvEnableReadOnlyMode,
-      _cscAreNativeQueriesEnabled = False,
+      _cscLogger = _lsLogger appEnvLoggers,
+      -- Native Queries are always enabled for Postgres in the OSS edition.
+      _cscAreNativeQueriesEnabled = \case
+        Postgres Vanilla -> True
+        _ -> False,
       _cscAreStoredProceduresEnabled = False
     }
 
@@ -339,5 +346,6 @@ buildCacheDynamicConfig AppContext {..} = do
       _cdcExperimentalFeatures = acExperimentalFeatures,
       _cdcDefaultNamingConvention = acDefaultNamingConvention,
       _cdcMetadataDefaults = acMetadataDefaults,
-      _cdcApolloFederationStatus = acApolloFederationStatus
+      _cdcApolloFederationStatus = acApolloFederationStatus,
+      _cdcCloseWebsocketsOnMetadataChangeStatus = acCloseWebsocketsOnMetadataChangeStatus
     }

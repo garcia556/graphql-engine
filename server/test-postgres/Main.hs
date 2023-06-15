@@ -114,7 +114,8 @@ main = do
                 maintenanceMode
                 EventingEnabled
                 readOnlyMode
-                False
+                logger
+                (const False)
                 False
             dynamicConfig =
               CacheDynamicConfig
@@ -125,6 +126,7 @@ main = do
                 (_default defaultNamingConventionOption)
                 emptyMetadataDefaults
                 ApolloFederationDisabled
+                (_default closeWebsocketsOnMetadataChangeOption)
             cacheBuildParams = CacheBuildParams httpManager (mkPgSourceResolver print) mkMSSQLSourceResolver staticConfig
 
         (_appInit, appEnv) <-

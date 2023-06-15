@@ -33,6 +33,7 @@ import Control.Monad.Stateless
 import Control.Monad.Trans.Control (MonadBaseControl)
 import Data.Aeson hiding (json)
 import Data.Aeson qualified as J
+import Data.Aeson.Encoding qualified as J
 import Data.Aeson.Key qualified as K
 import Data.Aeson.KeyMap qualified as KM
 import Data.Aeson.Types qualified as J
@@ -65,6 +66,7 @@ import Hasura.GraphQL.Logging (MonadExecutionLog, MonadQueryLog)
 import Hasura.GraphQL.Transport.HTTP qualified as GH
 import Hasura.GraphQL.Transport.HTTP.Protocol qualified as GH
 import Hasura.GraphQL.Transport.WSServerApp qualified as WS
+import Hasura.GraphQL.Transport.WebSocket qualified as WS
 import Hasura.GraphQL.Transport.WebSocket.Server qualified as WS
 import Hasura.GraphQL.Transport.WebSocket.Types qualified as WS
 import Hasura.HTTP
@@ -292,7 +294,7 @@ mkSpockAction ::
   ) =>
   AppStateRef impl ->
   -- | `QErr` JSON encoder function
-  (Bool -> QErr -> Value) ->
+  (Bool -> QErr -> Encoding) ->
   -- | `QErr` modifier
   (QErr -> QErr) ->
   APIHandler m a ->
@@ -416,7 +418,7 @@ mkSpockAction appStateRef qErrEncoder qErrModifier apiHandler = do
     logErrorAndResp userInfo reqId waiReq req includeInternal headers extraUserInfo qErr = do
       AppEnv {..} <- lift askAppEnv
       let httpLogMetadata = buildHttpLogMetadata @m emptyHttpLogGraphQLInfo extraUserInfo
-          jsonResponse = J.encode $ qErrEncoder includeInternal qErr
+          jsonResponse = J.encodingToLazyByteString $ qErrEncoder includeInternal qErr
           contentLength = ("Content-Length", B8.toStrict $ BB.toLazyByteString $ BB.int64Dec $ BL.length jsonResponse)
           allHeaders = [contentLength, jsonHeader]
       -- https://opentelemetry.io/docs/reference/specification/trace/semantic_conventions/http/#common-attributes
@@ -494,9 +496,10 @@ v1MetadataHandler ::
     UserInfoM m
   ) =>
   ((RebuildableSchemaCache -> m (EncJSON, RebuildableSchemaCache)) -> m EncJSON) ->
+  WS.WebsocketCloseOnMetadataChangeAction ->
   RQLMetadata ->
   m (HttpResponse EncJSON)
-v1MetadataHandler schemaCacheRefUpdater query = Tracing.newSpan "Metadata" $ do
+v1MetadataHandler schemaCacheRefUpdater closeWebsocketsOnMetadataChangeAction query = Tracing.newSpan "Metadata" $ do
   (liftEitherM . authorizeV1MetadataApi query) =<< ask
   appContext <- asks hcAppContext
   r <-
@@ -504,6 +507,7 @@ v1MetadataHandler schemaCacheRefUpdater query = Tracing.newSpan "Metadata" $ do
       runMetadataQuery
         appContext
         schemaCache
+        closeWebsocketsOnMetadataChangeAction
         query
   pure $ HttpResponse r []
 
@@ -804,6 +808,7 @@ mkWaiApp setupHook appStateRef consoleType ekgStore wsServerEnv = do
     Spock.spockAsApp
       $ Spock.spockT lowerIO
       $ httpApp setupHook appStateRef appEnv consoleType ekgStore
+      $ WS.mkCloseWebsocketsOnMetadataChangeAction (WS._wseServer wsServerEnv)
 
   let wsServerApp = WS.createWSServerApp (_lsEnabledLogTypes appEnvLoggingSettings) wsServerEnv appEnvWebSocketConnectionInitTimeout appEnvLicenseKeyCache
       stopWSServer = WS.stopWSServerApp wsServerEnv
@@ -845,8 +850,9 @@ httpApp ::
   AppEnv ->
   ConsoleType m ->
   EKG.Store EKG.EmptyMetrics ->
+  WS.WebsocketCloseOnMetadataChangeAction ->
   Spock.SpockT m ()
-httpApp setupHook appStateRef AppEnv {..} consoleType ekgStore = do
+httpApp setupHook appStateRef AppEnv {..} consoleType ekgStore closeWebsocketsOnMetadataChangeAction = do
   -- Additional spock action to run
   setupHook appStateRef
 
@@ -969,7 +975,7 @@ httpApp setupHook appStateRef AppEnv {..} consoleType ekgStore = do
       $ spockAction encodeQErr id
       $ mkPostHandler
       $ fmap (emptyHttpLogGraphQLInfo,)
-      <$> mkAPIRespHandler (v1MetadataHandler schemaCacheUpdater)
+      <$> mkAPIRespHandler (v1MetadataHandler schemaCacheUpdater closeWebsocketsOnMetadataChangeAction)
 
   Spock.post "v2/query" $ do
     onlyWhenApiEnabled isMetadataEnabled appStateRef
@@ -1102,7 +1108,7 @@ httpApp setupHook appStateRef AppEnv {..} consoleType ekgStore = do
     spockAction ::
       forall a.
       (FromJSON a) =>
-      (Bool -> QErr -> Value) ->
+      (Bool -> QErr -> Encoding) ->
       (QErr -> QErr) ->
       APIHandler m a ->
       Spock.ActionT m ()
@@ -1152,7 +1158,8 @@ onlyWhenApiEnabled isEnabled appStateRef endpointAction = do
     else do
       let qErr = err404 NotFound "resource does not exist"
       Spock.setStatus $ qeStatus qErr
-      Spock.json $ encodeQErr False qErr
+      setHeader jsonHeader
+      Spock.lazyBytes . J.encodingToLazyByteString $ encodeQErr False qErr
 
 raiseGenericApiError ::
   forall m.

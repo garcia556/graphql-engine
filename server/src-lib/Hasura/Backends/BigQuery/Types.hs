@@ -1,7 +1,7 @@
 {-# LANGUAGE DeriveAnyClass #-}
 {-# LANGUAGE DuplicateRecordFields #-}
 
--- | Types for Transact-SQL aka T-SQL; the language of SQL Server.
+-- | Types for BigQuery
 module Hasura.Backends.BigQuery.Types
   ( Aggregate (..),
     Aliased (..),
@@ -29,6 +29,7 @@ module Hasura.Backends.BigQuery.Types
     Join (..),
     JoinProvenance (ArrayAggregateJoinProvenance, ArrayJoinProvenance, ObjectJoinProvenance, OrderByJoinProvenance),
     JoinSource (..),
+    JoinType (..),
     JsonPath (..),
     NullsOrder (..),
     Op (..),
@@ -48,6 +49,7 @@ module Hasura.Backends.BigQuery.Types
     Time (..),
     Timestamp (..),
     Top (..),
+    TypedValue (..),
     Value (..),
     Where (..),
     With (..),
@@ -213,6 +215,10 @@ data WindowFunction
   deriving stock (Eq, Show, Generic, Data, Lift, Ord)
   deriving anyclass (FromJSON, Hashable, NFData, ToJSON)
 
+data JoinType = LeftOuter | Inner
+  deriving stock (Eq, Show, Generic, Data, Lift, Ord)
+  deriving anyclass (FromJSON, Hashable, NFData, ToJSON)
+
 data Join = Join
   { joinSource :: JoinSource,
     joinAlias :: EntityAlias,
@@ -220,7 +226,8 @@ data Join = Join
     joinProvenance :: JoinProvenance,
     joinFieldName :: Text,
     joinExtractPath :: Maybe Text,
-    joinRightTable :: EntityAlias
+    joinRightTable :: EntityAlias,
+    joinType :: JoinType
   }
   deriving stock (Eq, Ord, Show, Generic, Data, Lift)
   deriving anyclass (Hashable, NFData)
@@ -279,8 +286,8 @@ instance Semigroup Top where
   (<>) (Top x) (Top y) = Top (min x y)
 
 data Expression
-  = ValueExpression Value
-  | InExpression Expression Value
+  = ValueExpression TypedValue
+  | InExpression Expression TypedValue
   | AndExpression [Expression]
   | OrExpression [Expression]
   | NotExpression Expression
@@ -536,11 +543,18 @@ instance FromJSON Int64 where parseJSON = liberalInt64Parser Int64
 
 instance ToJSON Int64 where toJSON = liberalIntegralPrinter
 
+data TypedValue = TypedValue
+  { tvType :: ScalarType,
+    tvValue :: Value
+  }
+  deriving stock (Eq, Ord, Show, Generic, Data, Lift)
+  deriving anyclass (Hashable, NFData)
+
 intToInt64 :: Int.Int64 -> Int64
 intToInt64 = Int64 . tshow
 
 int64Expr :: Int.Int64 -> Expression
-int64Expr = ValueExpression . IntegerValue . intToInt64
+int64Expr i = ValueExpression (TypedValue IntegerScalarType (IntegerValue (intToInt64 i)))
 
 -- | BigQuery's conception of a fixed precision decimal.
 newtype Decimal = Decimal Text

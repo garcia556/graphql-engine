@@ -17,6 +17,9 @@ module Hasura.GraphQL.Transport.WebSocket
     onClose,
     sendMsg,
     sendCloseWithMsg,
+    mkCloseWebsocketsOnMetadataChangeAction,
+    runWebsocketCloseOnMetadataChangeAction,
+    WebsocketCloseOnMetadataChangeAction,
   )
 where
 
@@ -26,6 +29,7 @@ import Control.Monad.Morph (hoist)
 import Control.Monad.Trans.Control qualified as MC
 import Data.Aeson qualified as J
 import Data.Aeson.Casing qualified as J
+import Data.Aeson.Encoding qualified as J
 import Data.Aeson.TH qualified as J
 import Data.ByteString (ByteString)
 import Data.ByteString.Lazy qualified as LBS
@@ -67,6 +71,7 @@ import Hasura.GraphQL.Transport.Instances ()
 import Hasura.GraphQL.Transport.WebSocket.Protocol
 import Hasura.GraphQL.Transport.WebSocket.Server qualified as WS
 import Hasura.GraphQL.Transport.WebSocket.Types
+import Hasura.GraphQL.Transport.WebSocket.Types qualified as WS
 import Hasura.Logging qualified as L
 import Hasura.Metadata.Class
 import Hasura.Prelude
@@ -356,7 +361,7 @@ onConn wsId requestHead ipAddress onConnHActions = do
           (HTTP.statusCode $ qeStatus qErr)
           (HTTP.statusMessage $ qeStatus qErr)
           []
-          (LBS.toStrict $ J.encode $ encodeGQLErr False qErr)
+          (LBS.toStrict $ J.encodingToLazyByteString $ encodeGQLErr False qErr)
 
     checkPath = case WS.requestPath requestHead of
       "/v1alpha1/graphql" -> return (ERTLegacy, E.QueryHasura)
@@ -1212,3 +1217,18 @@ onClose logger serverMetrics prometheusMetrics subscriptionsState wsConn granula
         StreamingQuerySubscriber streamSubscriberId -> ES.removeStreamingQuery logger serverMetrics prometheusMetrics subscriptionsState streamSubscriberId granularPrometheusMetricsState operationName
   where
     opMap = _wscOpMap $ WS.getData wsConn
+
+newtype WebsocketCloseOnMetadataChangeAction = WebsocketCloseOnMetadataChangeAction
+  { runWebsocketCloseOnMetadataChangeAction :: IO ()
+  }
+
+-- | By default, we close all the websocket connections when the metadata changes. This function is used to create the
+-- action that will be run when the metadata changes.
+mkCloseWebsocketsOnMetadataChangeAction :: WS.WSServer WS.WSConnData -> WebsocketCloseOnMetadataChangeAction
+mkCloseWebsocketsOnMetadataChangeAction wsServer =
+  WebsocketCloseOnMetadataChangeAction
+    $ WS.closeAllConnectionsWithReason
+      wsServer
+      "Closing all websocket connections as the metadata has changed"
+      "Server state changed, restarting the server"
+      id

@@ -90,6 +90,7 @@ initSubscriptionsState pollHook =
     <*> pure pollHook
     <*> TMap.new
 
+-- | For dev debugging, output subject to change.
 dumpSubscriptionsState :: Bool -> LiveQueriesOptions -> StreamQueriesOptions -> SubscriptionsState -> IO J.Value
 dumpSubscriptionsState extended liveQOpts streamQOpts (SubscriptionsState lqMap streamMap _ _) = do
   lqMapJ <- dumpPollerMap extended lqMap
@@ -583,7 +584,7 @@ removeStreamingQuery logger serverMetrics prometheusMetrics subscriptionState (S
               (GaugeVector.dec numSubscriptionMetric promMetricGranularLabel)
               (GaugeVector.dec numSubscriptionMetric promMetricLabel)
 
--- | An async action query whose relationships are refered to table in a source.
+-- | An async action query whose relationships are referred to table in a source.
 -- We need to generate an SQL statement with the action response and execute it
 -- in the source database so as to fetch response joined with relationship rows.
 -- For more details see Note [Resolving async action query]
